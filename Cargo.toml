@@ -1,0 +1,19 @@
+[package]
+name = "arp-spoofer"
+version = "0.1.0"
+edition = "2021"
+description = "LAN MITM & spoofing toolkit for authorised network assessments"
+license = "MIT"
+
+[dependencies]
+pnet = "0.35.0"
+socket2 = "0.5.7"
+clap = { version = "4.5.20", features = ["derive"] }
+rand = "0.8.5"
+ctrlc = "3.4.5"
+
+[profile.release]
+opt-level = "z"
+lto = true
+strip = true
+codegen-units = 1
