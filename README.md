@@ -24,13 +24,27 @@ are restorable.
 
 | Command | What it does |
 |---|---|
-| `scan` | ARP-sweeps the interface's subnet and lists live hosts (IP → MAC). |
-| `arp` | ARP-spoofs a MITM between a `target` and the `gateway`, re-poisoning on an interval. On `Ctrl+C` it broadcasts the real mappings back so **both ARP caches are restored**. |
+| `scan` | ARP-sweeps the interface's subnet and lists live hosts (IP → MAC). `--json` for machine output. |
+| `arp` | ARP-spoofs a MITM between a `--target` and the `--gateway` (or `--all` discovered hosts), re-poisoning on an interval. On `Ctrl+C` it broadcasts the real mappings back so **all ARP caches are restored**. |
 | `mac` | Sets a specific MAC, a random locally-administered one (`--random`), or restores the pre-spoof MAC (`--restore`). The original is saved automatically on the first change. |
-| `respond` | Answers `LLMNR` (5355), `NBT-NS` (137) and `mDNS` (5353) queries with this host's IP — the Responder technique for coercing authentication. `--analyze` watches passively without answering. |
+| `respond` | Answers `LLMNR`/`NBT-NS`/`mDNS` queries with this host's IP — the Responder technique for coercing authentication. `--analyze` watches passively. |
+| `capture` | HTTP (80) + SMB (445) listeners that issue an NTLM challenge and record the **NetNTLMv1/v2 response in hashcat format**. Pair it with `respond`. |
+| `dnsspoof` | While MITM, forges A-record replies for passing DNS queries — all names or a `--domain` filter — pointing at a chosen IP. |
+| `dhcp` | Rogue DHCP server handing clients this host as gateway + DNS, or `--starve` to flood the real server's pool. |
+| `mitm6` | **Experimental** IPv6 DNS takeover: rogue Router Advertisements + DHCPv6 replies pointing DNS at this host. |
+| `sniff` | Passively extracts cleartext credentials (HTTP Basic/form, FTP) from traffic. |
+| `detect` | **Defensive**: watches the wire for ARP poisoning, duplicate gateway MACs, rogue DHCP servers and active name-responders. |
 
-Every write-type action is reversible, and nothing is persisted beyond a single saved MAC
-in the temp dir for `--restore`.
+Capture/sniff/detect/dns/dhcp take `--log <file>` to append findings as JSONL (timestamped,
+sourced) for an engagement artifact. Every write-type action is reversible, and nothing is
+persisted beyond a single saved MAC in the temp dir for `--restore`.
+
+### Maturity
+
+`scan`, `arp`, `mac`, `respond`, `capture` (HTTP), `dnsspoof`, `sniff` and `detect` are the
+solid core; the NTLMSSP and name-resolution parsers are unit-tested in CI. **SMB capture and
+`mitm6` are best-effort/experimental** — they build well-formed packets but have not been
+validated against live clients. Treat them as starting points, not finished exploits.
 
 ## Build
 
@@ -64,6 +78,19 @@ sudo ./arp-spoofer mac -i eth0 --restore
 # name-resolution poisoning (or watch passively with --analyze)
 sudo ./arp-spoofer respond -i eth0
 sudo ./arp-spoofer respond -i eth0 --analyze
+
+# coerce + capture NetNTLM hashes (run alongside respond) -> hashcat -m 5600
+sudo ./arp-spoofer capture --log loot.jsonl
+
+# DNS spoofing while MITM
+sudo ./arp-spoofer dnsspoof -i eth0 --spoof 192.168.1.50 --domain intranet
+
+# rogue DHCP / pool starvation
+sudo ./arp-spoofer dhcp -i eth0
+sudo ./arp-spoofer dhcp -i eth0 --starve
+
+# defensive: detect spoofing on the wire
+sudo ./arp-spoofer detect -i eth0 --log alerts.jsonl
 ```
 
 ## Design
@@ -81,7 +108,7 @@ sudo ./arp-spoofer respond -i eth0 --analyze
 
 This is a coherent layer-2/LAN tool. GPS spoofing, e-mail-header spoofing and browser
 User-Agent spoofing are unrelated domains and are intentionally left out rather than bolted
-on. DHCP rogue/starvation is a natural future module.
+on.
 
 ## License
 

