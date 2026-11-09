@@ -45,7 +45,7 @@ def seg(t, color="text", bold=False):
 
 
 def prompt():
-    return [seg("grimh3xx@centraltech", "user"), seg(":", "punct"),
+    return [seg("grimh3xx@arp-spoofer", "user"), seg(":", "punct"),
             seg("~/arp-spoofer", "path"), seg("$ ", "punct")]
 
 
